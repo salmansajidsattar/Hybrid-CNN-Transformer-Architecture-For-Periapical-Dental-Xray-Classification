@@ -1,0 +1,15 @@
+================================================================================
+TRAINING SUMMARY
+================================================================================
+
+Total Epochs Trained: 56
+Best Validation Accuracy: 29.19%
+Final Training Accuracy: 24.93%
+Final Validation Accuracy: 20.50%
+Final Overfitting Gap: 4.44%
+Final Learning Rate: 1.87e-05
+
+Total Parameters: 11,013,893
+Trainable Parameters: 11,013,893
+
+================================================================================

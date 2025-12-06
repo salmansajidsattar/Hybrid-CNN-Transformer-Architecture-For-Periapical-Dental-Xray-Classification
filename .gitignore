@@ -1,0 +1,6 @@
+researchpaper/
+checkpoints/
+data/raw/
+data/processed/
+env/
+model.onnx/

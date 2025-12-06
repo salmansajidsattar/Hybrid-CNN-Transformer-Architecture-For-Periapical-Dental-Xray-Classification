@@ -1,0 +1,17 @@
+================================================================================
+DENTAL CLASSIFICATION REPORT
+================================================================================
+
+                                   precision    recall  f1-score   support
+
+Primary Endo with Secondary Perio     0.0000    0.0000    0.0000        36
+        Primary Endodontic Lesion     0.1935    0.5143    0.2812        35
+Primary Perio with Secondary Endo     0.0000    0.0000    0.0000        15
+       Primary Periodontal Lesion     0.3333    0.0303    0.0556        33
+            True Combined Lesions     0.2188    0.3333    0.2642        42
+
+                         accuracy                         0.2050       161
+                        macro avg     0.1491    0.1756    0.1202       161
+                     weighted avg     0.1675    0.2050    0.1414       161
+
+================================================================================

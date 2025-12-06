@@ -1,0 +1,25 @@
+digraph G {
+	nodesep=0.6 rankdir=TB ranksep=0.8 splines=ortho
+	input [label="Input Image
+(B, 3, 224, 224)" fillcolor="#cce5ff" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	cnn [label="CNN Feature Extractor
+Channels=[64,128,256,512]
+Output: (B, 512, 14, 14)" fillcolor="#ffe6cc" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	patch [label="Patch Embedding
+Output: (B, 196, 512)" fillcolor="#e2f7e1" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	pos [label="Add CLS Token + Positional Encoding
+Tokens = 197" fillcolor="#f5e1ff" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	trans [label="Transformer Encoder
+6 Layers • 8 Heads
+Embed Dim = 512" fillcolor="#fff4cc" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	cls [label="Extract CLS Token
+(B, 512)" fillcolor="#d8f3dc" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	head [label="Classification Head
+Output: (B, 5)" fillcolor="#ffd6d6" fontname=Arial fontsize=12 penwidth=1.8 shape=box style=filled]
+	input -> cnn
+	cnn -> patch
+	patch -> pos
+	pos -> trans
+	trans -> cls
+	cls -> head
+}
