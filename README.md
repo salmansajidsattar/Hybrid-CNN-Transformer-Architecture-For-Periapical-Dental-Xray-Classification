@@ -63,6 +63,20 @@ pip install -r requirements.txt
 ```
 
 ## 💻 Usage
+### Pre-trained Model
+
+Download the pre-trained model weights:
+
+**[Download Model (Google Drive)](https://drive.google.com/file/d/13Hx3y25r5ZPexlyxVKDlcuHYg-mpLZbh/view?usp=drive_link)**
+
+Place the downloaded model in the `checkpoints/` directory:
+
+```bash
+mkdir -p checkpoints
+# Move downloaded model to checkpoints/
+mv ~/Downloads/best_model.h5 checkpoints/
+```
+
 
 ### Training
 
