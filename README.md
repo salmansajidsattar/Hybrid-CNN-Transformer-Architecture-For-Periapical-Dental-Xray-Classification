@@ -193,16 +193,16 @@ If you use this code in your research, please cite:
 ## 📧 Contact
 
 For questions or collaboration opportunities, please reach out:
-- Email: your.email@example.com
-- GitHub: [@yourusername](https://github.com/salmansajidsattar)
-- LinkedIn: [Your Name](https://linkedin.com/in/salmansajidsattar)
+- Email: salmansajidsattar@gmail.com
+- GitHub: [@salmansajidsattar](https://github.com/salmansajidsattar)
+- LinkedIn: [salmansajidsattar](https://linkedin.com/in/salmansajidsattar)
 
 ## 🔮 Future Work
 
 - [ ] Multi-class classification for different periapical conditions
 - [ ] Integration with DICOM standards
 - [ ] Mobile application deployment
-- [ ] Explainable AI visualization improvements
+- [ ] Explainable AI visualisation improvements
 - [ ] Real-time video stream processing
 - [ ] Multi-modal fusion with patient metadata
 
