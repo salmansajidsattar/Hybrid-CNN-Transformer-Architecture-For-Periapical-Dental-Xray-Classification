@@ -177,7 +177,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use this code in your research, please cite:
 
 ```bibtex
-@article{dental_periapical_2024,
+@article{dental_periapical_2025,
   title={Automated Periapical Disease Detection using CNN-Transformer Architecture},
   author={SALMAN SAJID & HASSAN SARDAR},
   year={2025}
