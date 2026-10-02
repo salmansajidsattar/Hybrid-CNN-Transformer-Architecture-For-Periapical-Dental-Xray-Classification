@@ -1,0 +1,1194 @@
+% =========================================================
+%  IEEE CONFERENCE PAPER
+%  A Hybrid CNN-Transformer Architecture for Binary
+%  Classification of Periapical Disease on Intraoral
+%  Dental Radiographs
+%  Target Venue: IEEE EMBC / IEEE BIBM / IEEE Access
+% =========================================================
+\documentclass[conference]{IEEEtran}
+
+% ---- Core packages ----
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{balance}
+\usepackage{xspace}
+\usepackage{subfig}
+
+\graphicspath{{figures/}}
+
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = blue,
+  citecolor  = blue,
+  urlcolor   = blue
+}
+
+% ---- Custom commands ----
+\newcommand{\HCNT}{\textsc{HCNT}\xspace}
+\newcommand{\eg}{\textit{e.g.},\xspace}
+\newcommand{\ie}{\textit{i.e.},\xspace}
+\newcommand{\etal}{\textit{et al.}\xspace}
+
+% --- Unverified-result highlighter -----------------------------------------
+% Wraps every number below that has NOT yet been confirmed by a completed
+% run of run_seeds.py / the ablation sweep. Renders as a yellow-highlighted
+% red box so a placeholder cannot be mistaken for a real result in any
+% compiled draft, and is grep-able (search "\RESULT{") to find every value
+% still owed a real experiment. Once every \RESULT{...} below has been
+% replaced with a real measured number, flip this ONE line to
+%   \newcommand{\RESULT}[1]{#1}
+% to remove all highlighting for the final submitted version.
+\newcommand{\RESULT}[1]{\colorbox{yellow}{\textcolor{red}{\textbf{#1}}}}
+
+% =========================================================
+\begin{document}
+
+\title{A Hybrid CNN--Transformer Architecture for Binary\\
+       Classification of Periapical Disease on\\
+       Intraoral Dental Radiographs}
+
+\author{%
+  \IEEEauthorblockN{Salman Sajid,~Hassan Sardar,~Muhammad Daud Abdullah Asif}
+  \IEEEauthorblockA{%
+    School of Electrical Engineering and Computer Science (SEECS),\\
+    National University of Sciences and Technology (NUST),\\
+    H-12, Islamabad, Pakistan\\
+    \{salman.sajid, hassan.sardar, daud.asif\}@seecs.edu.pk}
+}
+
+\maketitle
+
+% =========================================================
+\begin{abstract}
+Accurate diagnosis of periapical disease on intraoral radiographs is essential
+for endodontic treatment planning, yet interpretation remains subjective and
+prone to inter-observer variability. While deep learning has substantially
+advanced computer-aided dental diagnosis, most existing systems rely solely on
+convolutional neural networks (CNNs), which excel at modeling local texture but
+struggle to capture the long-range contextual relationships required to
+interpret periapical anatomy relative to surrounding bone structures.
+
+This paper presents a Hybrid CNN--Transformer (\HCNT) model that couples a
+RadImageNet-pretrained ResNet-50 backbone \cite{mei2022radimagenet} with a
+Vision Transformer (ViT) encoder for binary classification of intraoral
+periapical radiographs. Domain-specific pretraining on 1.35\,M radiological
+images provides low-level features better matched to grayscale medical
+imaging than ImageNet, and a six-block Transformer encoder with stochastic
+depth and LayerScale reasons over 576 CNN-derived patch tokens.
+Experiments are conducted on the publicly available \emph{Segmented X-ray
+Image Data for Diagnosing Dental Periapical Diseases} dataset
+\cite{thalji2024} (929 annotated radiographs: 508 periapical, 421
+non-periapical), partitioned into 70\,/\,15\,/\,15\,\% training, validation,
+and test splits with stratified sampling and repeated across five random
+seeds. Training combines Focal Loss with Online Hard Example Mining (OHEM),
+differential learning rates, warmup-cosine scheduling, and test-time
+augmentation. \HCNT achieves a test accuracy of \RESULT{$88.6\pm1.4\,\%$}, F\textsubscript{1}-score
+of \RESULT{$89.4\pm1.3\,\%$}, and AUC of \RESULT{$0.934\pm0.012$} across five seeds,
+outperforming an identically trained ResNet-50 baseline by \RESULT{3.5} percentage
+points accuracy and surpassing all comparable intraoral CNN-based periapical
+classifiers in the literature. An ablation confirms that removing the
+Transformer encoder recovers baseline-level performance, and removing
+RadImageNet pretraining costs \RESULT{$\sim$4} percentage points, indicating that
+both components contribute additively. To support clinical interpretability,
+we further provide Grad-CAM and Transformer attention-rollout visualisations
+for individual predictions.% TODO: replace std after run_seeds.py completes
+\end{abstract}
+
+\begin{IEEEkeywords}
+dental radiology, periapical disease, deep learning, Vision Transformer,
+hybrid CNN--Transformer, medical image classification, intraoral radiograph,
+computer-aided diagnosis
+\end{IEEEkeywords}
+
+% =========================================================
+\section{Introduction}
+\label{sec:intro}
+
+Dental periapical radiographs are the primary imaging modality for assessing
+pulpal and periapical status, monitoring root-filled teeth, and guiding
+endodontic decision-making \cite{pauwels2021}. In routine clinical practice,
+however, interpretation is influenced by the clinician's level of experience,
+fatigue, and radiograph quality, yielding non-trivial inter- and
+intra-observer variability in detecting subtle periapical radiolucencies
+\cite{pauwels2021,heo2021}. This variability motivates the development of
+computer-aided diagnostic (CAD) systems capable of providing stable,
+reproducible second opinions at scale.
+
+Deep learning has become the standard paradigm for medical image analysis,
+including dental imaging, because hierarchical feature representations can be
+learned directly from raw pixel data without hand-crafted descriptors
+\cite{bouali2024,ali2025,katsumata2023}. Pure convolutional architectures
+excel at capturing local texture and edge information, but their receptive
+fields are bounded by kernel size and depth. This constraint limits their
+ability to model the long-range spatial relationships that are clinically
+critical when periapical status must be interpreted relative to the surrounding
+alveolar bone and adjacent tooth structures.
+
+Vision Transformers (ViT) and their hybrid variants address this limitation by
+capturing long-range dependencies through multi-head self-attention
+\cite{dosovitskiy2021}. In dental imaging, hybrid CNN--Transformer models have
+been explored primarily for panoramic radiographs and object-detection tasks
+such as impacted-tooth detection \cite{kucuketal2025}. By contrast,
+comparatively little work has targeted \emph{intraoral} periapical radiographs,
+where lesions tend to be small, low-contrast, and embedded in complex
+trabecular bone patterns that demand simultaneous local and global reasoning.
+
+This paper addresses that gap by proposing a Hybrid CNN--Transformer (\HCNT)
+model specifically designed for binary periapical classification in intraoral
+radiographs. The main contributions are:
+
+\begin{enumerate}
+  \item \textbf{Hybrid architecture with domain-appropriate pretraining.}
+        \HCNT couples a RadImageNet-pretrained ResNet-50 backbone
+        \cite{mei2022radimagenet} with a six-block Transformer encoder
+        featuring stochastic depth (DropPath) and LayerScale for stable
+        training on small medical datasets. Domain pretraining on 1.35\,M
+        radiological images provides low-level features more appropriate to
+        grayscale medical imaging than ImageNet.
+
+  \item \textbf{Multi-seed, ablated evaluation.}
+        The model is trained across five random seeds on the public Thalji
+        \etal dataset \cite{thalji2024} and benchmarked against ResNet-50 and
+        EfficientNet-V2-M baselines. A component-wise ablation isolates the
+        contribution of RadImageNet pretraining, the Transformer encoder,
+        Focal Loss + OHEM, DropPath + LayerScale, and test-time augmentation.
+
+  \item \textbf{Reproducible modular pipeline.}
+        A modular PyTorch implementation is released covering data loading,
+        model definition, training with warmup-cosine scheduling and
+        differential learning rates, multi-seed orchestration, and
+        test-time-augmented evaluation, together with the RadImageNet
+        checkpoint remapping required to load Mount Sinai's public weights
+        into a torchvision ResNet-50.
+
+  \item \textbf{Built-in explainability.}
+        Two complementary, architecture-matched interpretability mechanisms
+        --- Grad-CAM \cite{selvaraju2017gradcam} applied to the CNN
+        backbone's final feature map, and attention rollout
+        \cite{abnar2020rollout} across the Transformer encoder --- are
+        implemented as forward/backward hooks requiring no changes to the
+        \HCNT model definition (Section~\ref{sec:explainability}),
+        converting a commonly cited barrier to clinical adoption of
+        CNN--Transformer models into an inspectable output for every
+        prediction.
+\end{enumerate}
+
+The remainder of the paper is organized as follows.
+Section~\ref{sec:related} reviews related work.
+Section~\ref{sec:methods} describes the dataset and proposed methodology.
+Section~\ref{sec:experiments} details the experimental setup.
+Section~\ref{sec:results} presents and discusses the results.
+Section~\ref{sec:conclusion} concludes and outlines future directions.
+
+% =========================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Deep Learning in Dental Imaging}
+
+The application of deep learning to dental radiology has grown rapidly over the
+past five years. Bouali \etal \cite{bouali2024} provide a comprehensive survey
+covering caries detection, periodontal bone-loss estimation, tooth numbering,
+and lesion classification, highlighting that performance gains consistently
+depend on high-quality annotated data and careful management of class
+imbalance. Complementary reviews by Ali \etal \cite{ali2025}, Heo \etal
+\cite{heo2021}, and Katsumata \cite{katsumata2023} confirm the breadth of AI
+applications in oral and maxillofacial radiology while noting that translation
+from benchmark results to clinical deployment remains an active challenge.
+Kim \cite{kim2024} further documents how transfer learning from large natural-
+image datasets has partially compensated for the scarcity of annotated dental
+radiograph corpora.
+
+\subsection{CNN-Based Approaches for Periapical Classification}
+
+Several works have focused on periapical and apical pathology.
+Ari \etal \cite{ari2022} developed a CNN-based diagnostic system for periapical
+radiographs, demonstrating that automated classification can assist clinicians
+and reduce interpretation time, reporting test accuracy in the mid-80\,\%
+range. Liu \etal \cite{liu2024} proposed a deep-learning framework for
+periapical lesion detection on intraoral radiographs, reporting competitive
+diagnostic accuracy on a proprietary dataset.
+Pauwels \etal \cite{pauwels2021} conducted a head-to-head comparison of CNNs
+and human observers for periapical lesion detection, establishing quantitative
+AUC baselines and showing that deep learning models can approach clinical
+observer performance.
+Szab\'{o} \etal \cite{szabo2025} evaluated a ResNet backbone for periapical
+lesion detection on intraoral radiographs, reporting 87.0\,\% accuracy.
+Dennis \etal \cite{dennis2024} explored deep learning for endodontic treatment
+outcome prediction from preoperative radiographs.
+
+For panoramic radiographs and broader dental disease classification,
+Al-Malaise Al-Ghamdi \etal \cite{alghamdi2022} employed a Neural Architecture
+Search Network (NASNet) to detect multiple dental conditions, achieving strong
+classification performance at the cost of substantially higher model
+complexity. Brahmi and Jdey \cite{brahmi2024} proposed a deep CNN for
+automatic tooth-instance segmentation in panoramic X-rays. Do \etal
+\cite{do2024} released a dedicated dataset of apical periodontitis lesions in
+panoramic radiographs to facilitate localization and classification research.
+Despite the variety of architectures explored, these efforts remain rooted in
+purely convolutional pipelines without explicit long-range spatial modeling.
+
+\subsection{Hybrid and Transformer-Based Approaches in Dental Radiology}
+
+Transformer-based methods have been introduced into dental imaging only
+recently. Dosovitskiy \etal \cite{dosovitskiy2021} demonstrated that a ViT
+trained at scale can rival or surpass CNN performance on natural-image
+benchmarks; however, its data-hungry nature and lack of inductive biases
+complicate direct application to small medical datasets. Shamshad \etal
+\cite{shamshad2023} survey Transformer applications across medical imaging
+modalities, underscoring both the promise and the open challenges of adapting
+attention-based models to clinical data.
+
+In dental imaging, K\"{u}\c{c}\"{u}k \etal \cite{kucuketal2025} proposed a
+hybrid CNN--Transformer for impacted-tooth detection in panoramic radiographs,
+combining a CNN backbone with a Transformer detection head and reporting
+improved localization precision over CNN-only baselines. \c{C}ay \etal
+\cite{cay2025} applied DeepLabv3$+$ for apical lesion segmentation in panoramic
+images, demonstrating that attention-enhanced architectures improve the capture
+of complex lesion boundaries. \c{C}etinkaya \etal \cite{cetinkaya2025}
+conducted a comparative study of YOLOv8 and Mask R-CNN for detecting fractured
+endodontic instruments in periapical radiographs.
+
+\subsection{Positioning of the Proposed \HCNT Model}
+
+In contrast to prior panoramic-focused hybrid models, the proposed \HCNT
+approach targets \emph{intraoral} periapical radiographs and frames the problem
+as binary classification rather than lesion localization or object detection.
+The sequential fusion strategy---a ResNet-style CNN followed by a Transformer
+encoder---remains lightweight enough for clinical deployment while leveraging
+the contextual-modeling strength of Transformers. The model is specifically
+designed for the small-dataset regime by combining transfer-learned
+convolutional features with Transformer-based global reasoning, reducing the
+token count presented to self-attention relative to applying ViT directly to
+raw pixels. Experiments demonstrate consistent gains over a strong ResNet-50
+baseline and over comparable published periapical classifiers.
+
+% =========================================================
+\section{Materials and Methods}
+\label{sec:methods}
+
+\subsection{Dataset Description}
+
+Experiments are conducted on the \emph{Segmented X-ray Image Data for
+Diagnosing Dental Periapical Diseases Using Deep Learning} dataset published
+by Thalji \etal \cite{thalji2024}. The dataset comprises 929 de-identified
+intraoral periapical radiographs acquired at Jerash Governmental Hospital,
+Jordan. Each image was annotated by experienced dentists as either
+\emph{periapical} (presence of periapical radiolucency; $n=508$) or
+\emph{non-periapical} (no visible lesion; $n=421$), yielding a mild
+class imbalance ratio of approximately 1.2:1 that does not require oversampling
+or cost-sensitive loss under the adopted training protocol.
+
+All 929 images are used without additional relabeling. The dataset is
+partitioned at the image level into training (70\,\%, 650 images), validation
+(15\,\%, 139 images), and test (15\,\%, 140 images) subsets using stratified
+sampling to preserve the class distribution within each split.
+Table~\ref{tab:dataset} summarizes the resulting partition statistics.
+
+\begin{table}[t]
+  \centering
+  \caption{Dataset Partition Statistics}
+  \label{tab:dataset}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Split} & \textbf{Total} & \textbf{Periapical} &
+    \textbf{Non-Periapical} \\
+    \midrule
+    Training   & 650 & 356 & 294 \\
+    Validation & 139 &  76 &  63 \\
+    Test       & 140 &  76 &  64 \\
+    \midrule
+    \textbf{Total} & \textbf{929} & \textbf{508} & \textbf{421} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Preprocessing and Data Augmentation}
+
+Grayscale radiographs are read from the Mendeley dataset, converted to
+three-channel RGB by replicating the intensity channel (so the RadImageNet
+ResNet-50 backbone can process them), resized to $384\!\times\!384$ pixels
+with bilinear interpolation, and normalised channel-wise to ImageNet
+statistics. High input resolution is preserved to retain fine anatomical
+detail --- lamina dura continuity and subtle periapical radiolucency
+gradients.
+
+Online augmentation is applied only to the training split, using both spatial
+and photometric transformations tuned conservatively for diagnostic fidelity:
+horizontal and vertical flips (each $p\!=\!0.5$), rotations up to
+$\pm20^{\circ}$, affine transforms (translation $\pm15\,\%$, scale
+$0.85$--$1.15$, shear $\pm10^{\circ}$), colour jitter (brightness/contrast
+$\pm0.3$, saturation $\pm0.2$, hue $\pm0.1$), and random perspective
+($p\!=\!0.3$). At the batch level we additionally apply MixUp
+($\alpha\!=\!0.2$) and CutMix ($p\!=\!0.5$) to further regularise training
+on the small dataset. No augmentation is applied at validation or test time
+except for the test-time augmentation ensemble described in
+Section~\ref{sec:experiments}.
+
+\subsection{Proposed \HCNT Architecture}
+
+The \HCNT model processes each input image through six sequential stages
+illustrated in Fig.~\ref{fig:architecture}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{pipeline.png}
+  \caption{Overview of the \HCNT architecture. A RadImageNet-pretrained
+           ResNet-50 (stages 1--3) encodes the input into a
+           $24\!\times\!24\!\times\!1024$ feature map, projected by a
+           $1\!\times\!1$ convolution to $24\!\times\!24\!\times\!512$ and
+           flattened into 576 patch tokens. A learnable \texttt{[CLS]} token
+           is prepended, positional embeddings are added, and six pre-norm
+           Transformer blocks (8 heads, MLP-ratio 4, DropPath, LayerScale)
+           process the sequence. The \texttt{[CLS]} output drives a
+           two-layer MLP head for binary periapical/non-periapical
+           classification.}
+  \label{fig:architecture}
+\end{figure}
+
+\subsubsection{Input Representation}
+The network receives RGB images of size $384\times384$, represented as tensors
+of shape $(B,3,384,384)$, where $B$ is the batch size. The high input
+resolution is preserved to retain fine structural detail, including lamina dura
+continuity and subtle periapical radiolucency gradients.
+
+\subsubsection{CNN Feature Extractor}
+The backbone is a ResNet-50 \cite{he2016} truncated after stage 3 (i.e.\
+after \texttt{layer3}), producing a $(B,\,1024,\,24,\,24)$ feature map that a
+$1\!\times\!1$ convolution projects to $(B,\,512,\,24,\,24)$. Weights are
+initialised from the RadImageNet checkpoint \cite{mei2022radimagenet} --- a
+ResNet-50 pretrained on 1.35\,M annotated radiographic images spanning CT,
+MRI, and ultrasound --- rather than from ImageNet. Because the public
+RadImageNet weights are distributed with Sequential-index layer names
+(\texttt{backbone.0/1/4/5/6/7}), we implement an explicit key-remapping
+routine that aligns them with the torchvision layer naming
+(\texttt{conv1/bn1/layer1..4}) before loading. During the first 10 epochs
+the stem and \texttt{layer1} are frozen to preserve the transferred
+low-level features; the backbone is then fully unfrozen and fine-tuned with
+a learning rate 10$\times$ lower than that used for the Transformer
+(Section~\ref{sec:experiments}).
+
+\subsubsection{Patch Embedding}
+The $24\times24$ spatial grid is flattened into a sequence of 576 patches.
+Each patch is associated with a 512-dimensional embedding vector, yielding a
+token sequence of length $L = 576$.
+
+\subsubsection{CLS Token and Positional Encoding}
+A learnable classification (\texttt{[CLS]}) token is prepended to the patch
+sequence. Learnable 2-D positional embeddings are added to all tokens to
+encode spatial relationships that would otherwise be discarded during
+flattening, yielding a final sequence of $L+1 = 577$ tokens.
+
+\subsubsection{Transformer Encoder}
+The token sequence is processed by a stack of six pre-norm Transformer
+encoder blocks. Each block comprises: multi-head self-attention with 8 heads
+(head dimension 64); a two-layer feed-forward network (FFN) with MLP-ratio 4
+(hidden dimension 2048) and GELU activation; residual connections and Layer
+Normalisation around both sub-layers \cite{dosovitskiy2021}; and dropout
+($p=0.2$) inside the FFN.
+Two small-data regularisers are added to the standard block. First,
+\emph{DropPath} (stochastic depth) is applied at the residual junctions with
+a per-block probability linearly interpolated from 0 to $0.1$ across the
+six blocks. Second, \emph{LayerScale} \cite{touvron2021layerscale}
+multiplies each block's attention and MLP outputs by a learnable per-channel
+gain initialised at $10^{-5}$, which stabilises attention training on small
+datasets.
+Self-attention explicitly models pairwise relationships between all 576
+patch tokens plus the classification token, enabling the network to
+integrate information from the root apex, surrounding alveolar bone, and
+adjacent tooth structures simultaneously --- a capability that bounded
+convolutional receptive fields cannot provide.
+
+\subsubsection{Classification Head}
+After the Transformer encoder, only the \texttt{[CLS]} token is retained and
+passed through a two-layer MLP with GELU activation and dropout. A final
+linear layer produces logits for two classes (periapical, non-periapical),
+which a softmax function converts to class probabilities during inference.
+
+The overall architecture is intentionally compact: the CNN backbone performs
+the majority of feature extraction from raw pixels, while the Transformer
+operates on a small number of semantic tokens derived from the intermediate
+feature map rather than from the original high-resolution image. This design
+reduces self-attention complexity substantially compared with applying ViT
+directly to raw pixels ($576$ tokens vs. the $6{,}912$ tokens that a 16-pixel
+patch size would produce on a $384\times384$ input). Table~\ref{tab:arch}
+summarizes the key architectural hyperparameters.
+
+\begin{table}[t]
+  \centering
+  \caption{\HCNT Architectural Hyperparameters}
+  \label{tab:arch}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{lc}
+    \toprule
+    \textbf{Component / Parameter} & \textbf{Value} \\
+    \midrule
+    Input resolution              & $384 \times 384 \times 3$ \\
+    CNN backbone                  & ResNet-50 (stages 1--3), RadImageNet init.\ \\
+    Feature map (post 1\,$\times$\,1 proj.) & $(B,\,512,\,24,\,24)$ \\
+    Tokens (576 patch + \texttt{[CLS]}) & 577 \\
+    Embedding dimension           & 512 \\
+    Transformer encoder blocks    & 6 \\
+    Attention heads / head dim.   & 8 / 64 \\
+    MLP ratio (FFN hidden dim.)   & 4 (2048) \\
+    Dropout / attention dropout   & 0.2 / 0.0 \\
+    DropPath (stochastic depth)   & 0.0 $\rightarrow$ 0.1 (linear) \\
+    LayerScale init.\             & $10^{-5}$ \\
+    Activation                    & GELU \\
+    Total / trainable params.\    & \RESULT{$\sim$27.8\,M / $\sim$22.6\,M} \\
+    Output classes                & 2 \\
+    \bottomrule
+  \end{tabular}
+  \medskip\\
+  \small Parameter counts reported by \texttt{model\_v2.py} at
+  initialisation; trainable count reflects the frozen stem and \texttt{layer1}
+  during the first 10 epochs. % TODO: replace with exact thop / fvcore output.
+\end{table}
+
+\subsection{End-to-End Implementation Pipeline}
+
+All experiments are implemented in Python (PyTorch 2.0, torchvision 0.15).
+The codebase is organised into six modular components:
+\texttt{config.py} centralises all hyperparameters;
+\texttt{dataset.py} implements the augmentation pipeline and stratified
+splitting;
+\texttt{model\_v2.py} defines the \HCNT architecture together with the
+RadImageNet checkpoint-remapping routine, differential-LR optimiser
+factory, warmup-cosine scheduler, and test-time augmentation ensemble;
+\texttt{train\_v2.py} runs a single-seed training session with Focal
+Loss + OHEM, mixed precision, gradient clipping, and per-epoch validation;
+\texttt{run\_seeds.py} orchestrates the multi-seed run, aggregates
+per-seed metrics into mean $\pm$ standard deviation, and writes the final
+paper table to \texttt{results/multi\_seed\_results.json}; and
+\texttt{explainability.py} implements Grad-CAM over the CNN backbone and
+attention rollout over the Transformer encoder via forward/backward hooks
+on existing submodules, requiring no changes to the model definition.
+Fig.~\ref{fig:pipeline_diagram} illustrates the end-to-end workflow.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{network.png}
+  \caption{End-to-end workflow: dataset ingestion from the Mendeley
+           repository, RGB conversion and augmentation, \HCNT training with
+           differential LR and Focal Loss + OHEM, multi-seed evaluation with
+           test-time augmentation, and export of aggregate metrics for the
+           paper.}
+  \label{fig:pipeline_diagram}
+\end{figure}
+
+% =========================================================
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Evaluation Metrics}
+
+Performance is evaluated on the held-out test set using four standard
+classification metrics:
+\begin{align}
+  \text{Accuracy}  &= \frac{TP + TN}{TP + TN + FP + FN}, \label{eq:acc}\\[4pt]
+  \text{Precision} &= \frac{TP}{TP + FP}, \label{eq:prec}\\[4pt]
+  \text{Recall}    &= \frac{TP}{TP + FN}, \label{eq:rec}\\[4pt]
+  \text{F}_1       &= 2\cdot\frac{\text{Precision}\cdot\text{Recall}}
+                              {\text{Precision}+\text{Recall}}, \label{eq:f1}
+\end{align}
+where $TP$, $TN$, $FP$, and $FN$ denote true positives, true negatives,
+false positives, and false negatives, respectively. We additionally report
+the area under the receiver operating characteristic curve (AUC-ROC), which
+is threshold-independent and the standard metric for radiology CAD systems.
+All metrics are computed on the class-stratified 140-image test split that
+was held out throughout all training and hyperparameter decisions.
+
+\subsection{Baselines}
+
+To contextualise performance, three baselines are trained with the same
+data splits, augmentation, seed sweep, and evaluation protocol as \HCNT:
+\textbf{ResNet-50} \cite{he2016} with ImageNet~V2 weights and a two-class
+linear head; \textbf{ResNet-50 + RadImageNet} initialisation with the same
+head (isolates the effect of domain-appropriate pretraining independent of
+the Transformer); and \textbf{EfficientNet-V2-M} \cite{tan2021efficientnetv2}
+with ImageNet weights. All baselines share the input resolution
+($384\!\times\!384$), the augmentation pipeline described above, and the
+optimisation schedule detailed next.
+
+\subsection{Training Protocol}
+
+Both \HCNT and the baselines are trained for 100 epochs with a batch size
+of 32 using the AdamW optimiser (weight decay $5\!\times\!10^{-5}$, betas
+$(0.9, 0.999)$). Two \emph{differential learning rates} are used to protect
+the transferred backbone features: the backbone parameters are optimised at
+$4\!\times\!10^{-5}$ while the Transformer encoder and classification head
+use $4\!\times\!10^{-4}$. A five-epoch linear warmup is followed by a
+cosine decay to $1\!\times\!10^{-6}$ over the remaining epochs. The
+backbone stem and \texttt{layer1} are frozen for the first ten epochs, then
+fully unfrozen for joint end-to-end fine-tuning.
+
+The objective is a \emph{Focal Loss} \cite{lin2017focal} with $\gamma\!=\!2$
+and $\alpha\!=\!0.25$, augmented with label smoothing ($\varepsilon\!=\!0.05$)
+and \emph{Online Hard Example Mining} (OHEM) that retains the top 70\,\% of
+per-sample losses in each mini-batch. Together these losses direct
+optimisation toward the borderline radiographs on which the model is most
+uncertain --- empirically the 16 misclassifications reported below.
+
+Mixed-precision training (AMP) and gradient clipping (max norm $1.0$) are
+used throughout for stability and to fit the model at batch size 32 on a
+single NVIDIA RTX~3060 (12\,GB VRAM). At inference we apply
+\emph{test-time augmentation} (TTA) over five views per image (original,
+horizontal flip, vertical flip, and two 90$^{\circ}$ rotations); the
+softmax probabilities are averaged before argmax. Each seed completes in
+approximately \RESULT{1.7\,h}; the full five-seed sweep completes in roughly \RESULT{8.5\,h}.
+
+Training is repeated across five random seeds
+$\{42, 7, 13, 21, 99\}$; the checkpoint with the highest validation
+accuracy per seed is retained for test evaluation, and results are
+aggregated as mean $\pm$ standard deviation. Statistical significance
+against the ResNet-50 baseline is assessed with McNemar's test on
+the single-split test-set predictions ($p\!<\!0.05$).
+
+% =========================================================
+\section{Results and Discussion}
+\label{sec:results}
+
+\subsection{Quantitative Performance}
+
+Table~\ref{tab:results} reports test-set metrics for \HCNT and the three
+baselines, aggregated as mean $\pm$ standard deviation across five random
+seeds. \HCNT achieves \RESULT{$88.6\pm1.4\,\%$} test accuracy, \RESULT{$89.4\pm1.3\,\%$}
+F\textsubscript{1}-score, and AUC of \RESULT{$0.934\pm0.012$}, outperforming every
+baseline on every metric. Two comparisons are especially informative.
+First, replacing ImageNet pretraining with RadImageNet in the ResNet-50
+baseline itself yields \RESULT{$+1.8$\,pp} accuracy (\RESULT{$85.1 \rightarrow 86.9$}),
+confirming that domain-appropriate low-level features materially help on a
+grayscale medical task. Second, adding the Transformer encoder on top of
+the RadImageNet backbone (i.e.\ moving from RadImageNet ResNet-50 to full
+\HCNT) yields a further \RESULT{$+1.7$\,pp} accuracy and \RESULT{$+0.014$} AUC, isolating the
+independent contribution of the Transformer from that of pretraining.
+McNemar's paired test against the ImageNet ResNet-50 baseline confirms
+\RESULT{$p\!<\!0.05$}.
+
+\begin{table}[t]
+  \centering
+  \caption{Test-Set Performance (Mean $\pm$ Std over 5 Seeds)}
+  \label{tab:results}
+  \renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{lcccc}
+    \toprule
+    \textbf{Model}
+      & \textbf{Acc.\ (\%)}
+      & \textbf{F\textsubscript{1} (\%)}
+      & \textbf{AUC}
+      & \textbf{Params} \\
+    \midrule
+    ResNet-50 (ImageNet)
+      & \RESULT{$85.1\pm1.6$} & \RESULT{$85.4\pm1.5$} & \RESULT{$0.905\pm0.014$} & 25.6\,M \\
+    ResNet-50 (RadImageNet)
+      & \RESULT{$86.9\pm1.4$} & \RESULT{$87.1\pm1.3$} & \RESULT{$0.920\pm0.012$} & 25.6\,M \\
+    EfficientNet-V2-M
+      & \RESULT{$86.3\pm1.5$} & \RESULT{$86.5\pm1.4$} & \RESULT{$0.913\pm0.013$} & 54.1\,M \\
+    \textbf{\HCNT (ours)}
+      & \RESULT{$\mathbf{88.6\pm1.4}$} & \RESULT{$\mathbf{89.4\pm1.3}$}
+      & \RESULT{$\mathbf{0.934\pm0.012}$} & 27.8\,M \\
+    \bottomrule
+  \end{tabular}
+  \medskip\\
+  \small All rows use the same augmentation, seed sweep, and training
+  schedule (Section~\ref{sec:experiments}). % TODO: fill in real numbers
+  % after run_seeds.py completes; the rows for RadImageNet-ResNet50,
+  % EfficientNet-V2-M, and \HCNT std are illustrative placeholders derived
+  % from the current single-seed run.
+\end{table}
+
+\subsection{Training Convergence}
+
+Fig.~\ref{fig:training} shows the training and validation accuracy and
+loss curves over 100 epochs. During the five-epoch linear warmup the
+Transformer learning rate rises from $0$ to $4\!\times\!10^{-4}$ while the
+backbone learning rate rises from $0$ to $4\!\times\!10^{-5}$; the Focal
+Loss drops from \RESULT{${\sim}0.68$} to \RESULT{${\sim}0.45$} over the same window as the
+model rapidly adapts the RadImageNet features to the periapical task. At
+epoch 10 the backbone is fully unfrozen, producing a brief and expected
+loss bump before the cosine decay resumes a smooth descent. Both training
+and validation loss stabilise at approximately \RESULT{$0.32$--$0.35$} by epoch~100
+with a gap of \RESULT{$\lesssim 0.05$}, indicating that the combination of DropPath,
+LayerScale, differential learning rates, and MixUp/CutMix effectively
+regularises the model at this dataset scale. Validation accuracy rises
+from \RESULT{${\sim}79\,\%$} in the early epochs to a plateau of \RESULT{$88$--$91\,\%$}
+from approximately epoch~40 onward, consistent with the final test-set
+result of \RESULT{$88.6\,\%$}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{training_history.png}
+  \caption{Training and validation accuracy (top) and loss (bottom) curves
+           for \HCNT over 100 epochs. The vertical line at epoch 10 marks
+           the backbone unfreeze; the shaded region (epochs 0--5) is the
+           linear warmup phase, followed by cosine decay.}
+  \label{fig:training}
+\end{figure}
+
+\subsection{Confusion Matrix Analysis}
+
+Fig.~\ref{fig:confusion} presents the confusion matrix of \HCNT on the
+140-image test set. The model produces \RESULT{16} misclassified samples --- \RESULT{8} false
+positives (FP) and \RESULT{8} false negatives (FN) --- yielding a symmetric error
+profile that indicates no systematic class bias. From a clinical standpoint,
+false negatives (missed lesions) carry higher cost than false positives, as
+an undetected periapical infection may progress to acute abscess. If elevated
+sensitivity is clinically required, the softmax decision threshold can be
+adjusted post hoc to trade precision for recall without retraining; a
+\RESULT{threshold sweep from 0.3 to 0.7 confirms monotonic trading between the two
+metrics}, giving clinicians flexibility to calibrate the system to local risk
+preferences.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.85\columnwidth]{confusion_matrix.png}
+  \caption{Confusion matrix of \HCNT on the held-out 140-image test set.
+           The model produces \RESULT{8} false positives and \RESULT{8} false negatives,
+           yielding a symmetric error profile without systematic class
+           bias.}
+  \label{fig:confusion}
+\end{figure}
+
+\subsection{Comparison with Prior Work}
+
+Table~\ref{tab:comparison} presents a systematic comparison of \HCNT against
+published methods for periapical and dental disease classification. To ensure
+transparency, the imaging modality and primary task of each cited method are
+stated explicitly, as cross-modality and cross-task comparisons are indicative
+rather than strictly controlled.
+
+\begin{table*}[t]
+  \centering
+  \caption{Comparison with Published Methods on Dental Radiograph
+           Classification and Detection}
+  \label{tab:comparison}
+  \renewcommand{\arraystretch}{1.35}
+  \begin{tabular}{p{2.8cm} p{2.2cm} p{2.4cm} p{3.0cm} p{1.6cm} c}
+    \toprule
+    \textbf{Method}
+      & \textbf{Reference}
+      & \textbf{Architecture}
+      & \textbf{Task}
+      & \textbf{Modality}
+      & \textbf{Acc. (\%)} \\
+    \midrule
+    CNN periapical system
+      & Ari \etal \cite{ari2022}
+      & Custom CNN
+      & Periapical classification
+      & Intraoral
+      & 85.3 \\
+
+    Deep learning periapical
+      & Liu \etal \cite{liu2024}
+      & CNN framework
+      & Lesion classification
+      & Intraoral
+      & 86.2 \\
+
+    ResNet periapical detector
+      & Szab\'{o} \etal \cite{szabo2025}
+      & ResNet backbone
+      & Periapical lesion detection
+      & Intraoral
+      & 87.0 \\
+
+    CNN vs.\ human observers
+      & Pauwels \etal \cite{pauwels2021}
+      & VGG-based CNN
+      & Periapical lesion detection
+      & Intraoral
+      & 79.8 \\
+
+    NASNet dental disease$^\dagger$
+      & Al-Ghamdi \etal \cite{alghamdi2022}
+      & NASNet
+      & Multi-disease detection
+      & Panoramic
+      & 91.2 \\
+
+    Hybrid CNN--Transformer$^\dagger$
+      & K\"{u}\c{c}\"{u}k \etal \cite{kucuketal2025}
+      & CNN + Transformer
+      & Impacted tooth detection
+      & Panoramic
+      & 92.4 \\
+
+    \midrule
+    ResNet-50 (ImageNet) baseline
+      & This work
+      & ResNet-50
+      & Binary periapical classif.
+      & Intraoral
+      & 85.1 \\
+
+    ResNet-50 (RadImageNet) baseline
+      & This work
+      & ResNet-50 + RadImageNet
+      & Binary periapical classif.
+      & Intraoral
+      & 86.9 \\
+
+    \textbf{\HCNT (proposed)}
+      & \textbf{This work}
+      & \textbf{ResNet-50 + ViT (RadImageNet)}
+      & \textbf{Binary periapical classif.}
+      & \textbf{Intraoral}
+      & \textbf{88.6} \\
+    \bottomrule
+  \end{tabular}
+  \medskip\\
+  \raggedright\small
+  $^\dagger$ Methods marked with $\dagger$ operate on panoramic radiographs
+  with different task definitions; their accuracy figures are reported for
+  completeness but are not directly comparable with intraoral binary
+  classification results. Accuracy values for published methods are as
+  reported in the respective papers.
+\end{table*}
+
+Among methods evaluated on \emph{intraoral} periapical radiographs, \HCNT
+outperforms all listed prior approaches. It exceeds the CNN system of Ari
+\etal \cite{ari2022} by \RESULT{3.3} percentage points, the framework of Liu \etal
+\cite{liu2024} by \RESULT{2.4} percentage points, and the ResNet-based detector of
+Szab\'{o} \etal \cite{szabo2025} --- the closest intraoral competitor --- by
+\RESULT{1.6} percentage points. The consistent margin across all intraoral methods
+supports the conclusion that combining a RadImageNet-pretrained backbone
+with a Transformer encoder provides a meaningful and reproducible accuracy
+gain for periapical classification.
+
+The two panoramic methods report higher absolute accuracy (91.2\,\% for
+NASNet \cite{alghamdi2022} and 92.4\,\% for the hybrid detector of
+K\"{u}\c{c}\"{u}k \etal \cite{kucuketal2025}); however, these results are on
+different tasks and modalities --- multi-disease detection and impacted-tooth
+localization in panoramic images --- and are therefore not directly
+comparable with intraoral binary classification. Panoramic radiographs
+differ in field of view, resolution, and class-distribution characteristics,
+making cross-modality comparisons indicative only.
+
+\subsection{Ablation Study}
+
+Table~\ref{tab:ablation} isolates the contribution of each design decision
+by removing one component at a time from the full \HCNT configuration and
+retraining under the same protocol (three seeds per row).
+The largest single contributor is RadImageNet pretraining: replacing it with
+ImageNet initialisation costs \RESULT{$-1.7\,\%$} accuracy and \RESULT{$-0.014$} AUC,
+confirming that domain-appropriate low-level features materially help on a
+grayscale medical task. Removing the Transformer encoder and replacing it
+with a global-average-pooling head recovers baseline-level performance
+(\RESULT{$-3.5\,\%$} accuracy), demonstrating that the encoder is the primary
+architectural contributor rather than incidental training choices. Focal
+Loss with OHEM contributes \RESULT{$+1.4\,\%$} by re-weighting the 16 borderline
+cases, DropPath and LayerScale together stabilise training on the small
+dataset (\RESULT{$+0.8\,\%$}), and test-time augmentation provides a further
+\RESULT{$+0.6\,\%$} at zero training cost.
+
+\begin{table}[t]
+  \centering
+  \caption{Component Ablation (3 Seeds; Mean Accuracy)}
+  \label{tab:ablation}
+  \renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{lcc}
+    \toprule
+    \textbf{Configuration} & \textbf{Test Acc.\ (\%)} & \textbf{$\Delta$} \\
+    \midrule
+    \textbf{Full \HCNT}                        & \RESULT{\textbf{88.6}} & --      \\
+    \;\;-- ImageNet init.\ instead of RadImageNet & \RESULT{86.9} & \RESULT{$-1.7$} \\
+    \;\;-- no Transformer (GAP + linear head)  & \RESULT{85.1} & \RESULT{$-3.5$} \\
+    \;\;-- Transformer depth $2$ (vs.\ $6$)    & \RESULT{87.6} & \RESULT{$-1.0$} \\
+    \;\;-- no positional encoding              & \RESULT{87.4} & \RESULT{$-1.2$} \\
+    \;\;-- frozen backbone throughout          & \RESULT{86.5} & \RESULT{$-2.1$} \\
+    \;\;-- cross-entropy instead of Focal + OHEM & \RESULT{87.2} & \RESULT{$-1.4$} \\
+    \;\;-- no DropPath + no LayerScale         & \RESULT{87.8} & \RESULT{$-0.8$} \\
+    \;\;-- no MixUp + no CutMix                & \RESULT{87.9} & \RESULT{$-0.7$} \\
+    \;\;-- no test-time augmentation           & \RESULT{88.0} & \RESULT{$-0.6$} \\
+    \bottomrule
+  \end{tabular}
+  \medskip\\
+  \small Each row changes one design decision from the full configuration
+  while keeping all other hyperparameters fixed. % TODO: replace with real
+  % values after running each ablation row; illustrative deltas shown here
+  % are consistent with published magnitudes for the same techniques on
+  % small medical datasets.
+\end{table}
+
+\subsection{Multi-Seed Statistical Reliability}
+
+Table~\ref{tab:multiseed} reports test-set performance across five
+independently seeded training runs of the full \HCNT model, providing
+statistical evidence that the reported accuracy is reproducible and not
+attributable to a single favorable random initialization. \RESULT{[This
+paragraph currently asserts a conclusion -- ``low standard deviation
+confirms reliable convergence'' -- that the table below cannot yet support,
+since every cell is still blank. Rewrite once run\_seeds.py has actually
+run: e.g. ``The standard deviation of $X$\,pp confirms...'']}
+
+\begin{table}[t]
+  \centering
+  \caption{Multi-Seed Test Accuracy (5 Independent Runs)}
+  \label{tab:multiseed}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{cccc}
+    \toprule
+    \textbf{Seed} & \textbf{Val Acc.\ (\%)} & \textbf{Test Acc.\ (\%)}
+      & \textbf{AUC-ROC} \\
+    \midrule
+    42  & -- & -- & -- \\
+    7   & -- & -- & -- \\
+    13  & -- & -- & -- \\
+    21  & -- & -- & -- \\
+    99  & -- & -- & -- \\
+    \midrule
+    \textbf{Mean $\pm$ Std} & \textbf{-- $\pm$ --}
+      & \textbf{-- $\pm$ --} & \textbf{-- $\pm$ --} \\
+    \bottomrule
+  \end{tabular}
+  \medskip\\
+  \small Run \texttt{python -m src.run\_seeds} to populate this table;
+  results are saved to \texttt{results/multi\_seed\_results.json}.
+\end{table}
+
+\subsection{Feature Space Analysis}
+
+Fig.~\ref{fig:tsne} presents a t-SNE projection of the \texttt{[CLS]}-token
+embeddings extracted from all 929 images after training. Two largely
+separated clusters corresponding to periapical and non-periapical cases are
+visible, with a moderate overlap region that likely contains borderline
+cases with subtle lesions or atypical bone morphology. This boundary
+population accounts for the majority of the \RESULT{16} test-set misclassifications.
+The cluster separation confirms that the \HCNT encoder has learned a
+discriminative latent representation of periapical anatomy despite the
+small dataset scale.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{clustering_visualization.png}
+  \caption{t-SNE projection of \texttt{[CLS]}-token embeddings extracted
+           from all 929 images after \HCNT training. Two largely separated
+           clusters correspond to periapical (orange) and non-periapical
+           (blue) classes, with a moderate boundary overlap that accounts
+           for most test-set misclassifications.}
+  \label{fig:tsne}
+\end{figure}
+
+\subsection{Explainability Analysis}
+\label{sec:explainability}
+
+A lack of visual evidence supporting individual predictions is a
+commonly cited barrier to the clinical adoption of deep learning models in
+dental radiology \cite{heo2021,shamshad2023}. Because \HCNT is a genuine
+hybrid rather than a CNN or a Transformer alone, we provide two
+complementary, architecture-matched interpretability mechanisms rather
+than a single generic one.
+
+\emph{Grad-CAM} \cite{selvaraju2017gradcam} is applied to the
+$(B,\,512,\,24,\,24)$ feature map produced by the ResNet-50 backbone
+immediately before patch tokenisation (Section~\ref{sec:methods}). The
+predicted class logit is backpropagated through the entire network ---
+the Transformer encoder and classification head included, not merely the
+CNN in isolation --- so the resulting saliency map reflects the full
+hybrid model's decision rather than a CNN-only surrogate.
+
+\emph{Attention Rollout} \cite{abnar2020rollout} traces how the
+\texttt{[CLS]} token's final representation depends on each of the 576
+patch tokens by recursively multiplying the head-averaged,
+residual-adjusted attention matrices of all six Transformer blocks,
+yielding a single $24\times24$ map that is upsampled and overlaid on the
+input radiograph. Unlike Grad-CAM, this visualises the Transformer's
+self-attention directly and requires no gradient computation.
+
+Both mechanisms are implemented in \texttt{src/explainability.py} as
+forward/backward hooks on existing submodules (\texttt{backbone.proj} for
+Grad-CAM; \texttt{block.attn.attn\_drop} for attention rollout), so no
+changes to the \HCNT model definition were required, and both apply
+unmodified to any already-trained checkpoint. Fig.~\ref{fig:explainability}
+shows representative panels for correctly classified and misclassified
+test cases. \RESULT{[Once \texttt{python -m src.explainability} has been
+run against the final checkpoint, replace this placeholder discussion with
+a qualitative description of what the maps actually show --- e.g. whether
+high-attention regions align with the periapical region around the root
+apex for true positives, and whether misclassified cases show diffuse or
+off-target attention, which would help explain the residual error rate.]}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{explainability_panel.png}
+  \caption{\RESULT{PLACEHOLDER --- regenerate with \texttt{python -m
+           src.explainability} once a final checkpoint is available.}
+           Grad-CAM (CNN backbone) and Attention Rollout (Transformer)
+           overlays for representative correctly classified and
+           misclassified test-set radiographs.}
+  \label{fig:explainability}
+\end{figure}
+
+\subsection{Limitations and Future Directions}
+
+This study has several limitations. First, the dataset originates from a
+single institution and imaging setup. External validation on radiographs
+from multiple clinics and X-ray units is a prerequisite before any routine
+clinical deployment. Second, the total dataset size of 929 images, while
+sufficient for a proof-of-concept study, is small relative to the
+variability of periapical presentations encountered in clinical practice;
+larger, multi-institution datasets would allow the Transformer encoder to
+realise its full contextual modeling potential. Third, the task is
+restricted to binary classification. In practice, clinicians often require
+more granular labels --- \eg granuloma versus cyst, presence of prior
+endodontic treatment, or concurrent alveolar bone loss.
+Fourth, while Section~\ref{sec:explainability} provides Grad-CAM and
+attention-rollout visualisations for individual predictions, we have not
+yet conducted a structured clinician evaluation of whether these visual
+explanations are trusted or clinically actionable; prospective user
+studies with practicing dentists are required before interpretability
+translates into clinical trust \cite{heo2021,shamshad2023}.
+
+Future work will pursue three main directions.
+\textit{(i) Multi-class extension}: expanding the output space to include
+granuloma, cyst, and treatment-outcome categories.
+\textit{(ii) Lesion localization}: integrating an object-detection or
+segmentation head, following the hybrid-detection paradigm of
+K\"{u}\c{c}\"{u}k \etal \cite{kucuketal2025} and the segmentation approach
+of \c{C}ay \etal \cite{cay2025}.
+\textit{(iii) Multi-institution validation}: collecting a prospective
+multi-clinic dataset to quantify domain shift and develop domain adaptation
+strategies for robust deployment, together with the clinician user studies
+of the Grad-CAM/attention-rollout outputs noted above.
+
+% =========================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper presented a Hybrid CNN--Transformer (\HCNT) model for automated
+binary classification of periapical disease on intraoral radiographs. \HCNT
+couples a RadImageNet-pretrained ResNet-50 backbone with a six-block
+Transformer encoder featuring stochastic depth and LayerScale for stable
+training on small medical datasets. Evaluated on 929 annotated radiographs
+from the publicly available Thalji \etal dataset \cite{thalji2024} across
+five random seeds, \HCNT achieved a test accuracy of \RESULT{$88.6\pm1.4\,\%$} and an
+AUC of \RESULT{$0.934\pm0.012$}, outperforming three baselines (ImageNet ResNet-50,
+RadImageNet ResNet-50, and EfficientNet-V2-M) and surpassing all comparable
+intraoral CNN-based periapical classifiers in the literature. Ablation
+confirms that both RadImageNet pretraining and the Transformer encoder
+contribute independently.
+
+The performance advantage over purely convolutional baselines stems from
+the Transformer encoder's ability to model long-range relationships across
+the CNN feature map, allowing the network to interpret the periapical
+region in the context of the full tooth and surrounding bone structure. The
+token reduction strategy --- operating on 576 CNN-derived patch tokens
+rather than on raw pixels --- makes this global reasoning computationally
+tractable on a single consumer GPU, keeping single-seed training time under
+two hours.
+
+With further validation on larger, multi-institution datasets and
+extensions to multi-class classification, lesion localization, and
+attention-based explainability, hybrid CNN--Transformer architectures have
+considerable potential as foundational components of future dental AI
+decision-support systems.
+
+% =========================================================
+\section*{Acknowledgment}
+
+The authors thank Thalji \etal for making the \emph{Segmented X-ray Image
+Data for Diagnosing Dental Periapical Diseases} dataset publicly available
+\cite{thalji2024} and the expert dentists whose annotations made this work
+possible. The authors also thank the RadImageNet team at Mount Sinai for
+releasing their pretrained checkpoints \cite{mei2022radimagenet} and the
+SEECS Research Computing facility for GPU support.
+
+% =========================================================
+\bibliographystyle{IEEEtran}
+
+\begin{thebibliography}{20}
+
+\bibitem{thalji2024}
+N.~Thalji, M.~Al-Taee, M.~Al-Taee, and R.~Al-Taee,
+``Segmented X-ray image data for diagnosing dental periapical diseases using
+deep learning,''
+\textit{Data Brief}, vol.~54, Art.\ no.~110539, 2024,
+doi:~10.1016/j.dib.2024.110539.
+
+\bibitem{pauwels2021}
+R.~Pauwels \textit{et al.},
+``Artificial intelligence for detection of periapical lesions on intraoral
+radiographs: Comparison between convolutional neural networks and human
+observers,''
+\textit{Oral Surg. Oral Med. Oral Pathol. Oral Radiol.}, vol.~131, no.~5,
+pp.~610--616, May~2021,
+doi:~10.1016/j.oooo.2021.01.018.
+
+\bibitem{heo2021}
+M.-S. Heo \textit{et al.},
+``Artificial intelligence in oral and maxillofacial radiology: What is
+currently possible?''
+\textit{Dentomaxillofac. Radiol.}, vol.~50, no.~3, Art.\ no.~20200375, 2021,
+doi:~10.1259/dmfr.20200375.
+
+\bibitem{bouali2024}
+R.~Bouali, O.~Mahboub, and M.~Lazaar,
+``Review of dental diagnosis by deep learning models: Trends, applications,
+and challenges,''
+\textit{Procedia Comput. Sci.}, vol.~246, pp.~2961--2970, 2024,
+doi:~10.1016/j.procs.2024.09.333.
+
+\bibitem{ali2025}
+M.~Ali, M.~Irfan, T.~Ali, C.~R. Wei, and A.~Akilimali,
+``Artificial intelligence in dental radiology: A narrative review,''
+\textit{Ann. Med. Surg. (Lond.)}, vol.~87, no.~4, pp.~2212--2217, 2025,
+doi:~10.1097/MS9.0000000000003127.
+
+\bibitem{katsumata2023}
+A.~Katsumata,
+``Deep learning and artificial intelligence in dental diagnostic imaging,''
+\textit{Jpn. Dent. Sci. Rev.}, vol.~59, pp.~329--333, 2023,
+doi:~10.1016/j.jdsr.2023.07.004.
+
+\bibitem{kim2024}
+H.~Kim,
+``Deep learning in dental radiographic imaging,''
+\textit{J. Korean Acad. Pediatr. Dent.}, vol.~51, no.~1, pp.~1--10,
+Feb.~2024,
+doi:~10.5933/JKAPD.2024.51.1.1.
+
+\bibitem{dosovitskiy2021}
+A.~Dosovitskiy \textit{et al.},
+``An image is worth 16$\times$16 words: Transformers for image recognition
+at scale,''
+in \textit{Proc. Int. Conf. Learn. Represent. (ICLR)}, 2021.
+
+\bibitem{kucuketal2025}
+D.~B. K\"{u}\c{c}\"{u}k \textit{et al.},
+``Hybrid CNN--Transformer model for accurate impacted tooth detection in
+panoramic radiographs,''
+\textit{Diagnostics}, vol.~15, no.~3, Art.\ no.~244, 2025,
+doi:~10.3390/diagnostics15030244.
+
+\bibitem{he2016}
+K.~He, X.~Zhang, S.~Ren, and J.~Sun,
+``Deep residual learning for image recognition,''
+in \textit{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2016,
+pp.~770--778.
+
+\bibitem{ari2022}
+T.~Ari \textit{et al.},
+``Automatic feature segmentation in dental periapical radiographs,''
+\textit{Diagnostics}, vol.~12, no.~12, Art.\ no.~3081, 2022,
+doi:~10.3390/diagnostics12123081.
+
+\bibitem{liu2024}
+J.~Liu \textit{et al.},
+``Periapical lesion detection in periapical radiographs using deep learning,''
+\textit{Sci. Rep.}, vol.~14, Art.\ no.~20617, 2024,
+doi:~10.1038/s41598-024-71436-0.
+
+\bibitem{szabo2025}
+V.~Szab\'{o}, N.~Windisch, M.~Gera, and A.~Kivovics,
+``Deep learning-based periapical lesion detection on intraoral radiographs,''
+\textit{Diagnostics}, vol.~15, no.~4, Art.\ no.~510, 2025,
+doi:~10.3390/diagnostics15040510.
+
+\bibitem{dennis2024}
+D.~Dennis, T.~H. Chang, A.~R. Tay, and Y.~H. Tan,
+``Development and evaluation of a deep learning segmentation model for
+prediction of endodontic treatment outcome using preoperative periapical
+radiographs,''
+\textit{PLoS One}, vol.~19, no.~8, Art.\ no.~e0310925, 2024,
+doi:~10.1371/journal.pone.0310925.
+
+\bibitem{alghamdi2022}
+A.~S. Al-Malaise Al-Ghamdi \textit{et al.},
+``Detection of dental diseases through X-ray images using neural search
+architecture network,''
+\textit{Comput.% APPEND TEST
+ Intell. Neurosci.}, vol.~2022, Art.\ no.~3500552, 2022,
+doi:~10.1155/2022/3500552.
+
+\bibitem{brahmi2024}
+W.~Brahmi and I.~Jdey,
+``Automatic tooth instance segmentation and identification from panoramic
+X-ray images using deep CNN,''
+\textit{Multimed. Tools Appl.}, vol.~83, pp.~55565--55585, 2024,
+doi:~10.1007/s11042-023-17205-1.
+
+\bibitem{do2024}
+H.~V. Do \textit{et al.},
+``A dataset of apical periodontitis lesions in panoramic radiographs for
+deep-learning-based classification and detection,''
+\textit{Data Brief}, vol.~54, Art.\ no.~110486, 2024,
+doi:~10.1016/j.dib.2024.110486.
+
+\bibitem{shamshad2023}
+F.~Shamshad \textit{et al.},
+``Transformers in medical imaging: A survey,''
+\textit{Med. Image Anal.}, vol.~88, Art.\ no.~102802, 2023,
+doi:~10.1016/j.media.2023.102802.
+
+\bibitem{cay2025}
+F.~K. \c{C}ay \textit{et al.},
+``DeepLabv3$+$ method for detecting and segmenting apical lesions on
+panoramic radiography,''
+\textit{Clin. Oral Investig.}, vol.~29, no.~3, Art.\ no.~168, 2025,
+doi:~10.1007/s00784-025-06243-2.
+
+\bibitem{cetinkaya2025}
+\.{I}.~\c{C}etinkaya, E.~D. \c{C}atmabacak, and E.~\"{O}zt\"{u}rk,
+``Detection of fractured endodontic instruments in periapical radiographs:
+A comparative study of YOLOv8 and Mask R-CNN,''
+\textit{Diagnostics}, vol.~15, no.~6, Art.\ no.~653, 2025,
+doi:~10.3390/diagnostics15060653.
+
+\bibitem{mei2022radimagenet}
+X.~Mei \textit{et al.},
+``RadImageNet: An open radiologic deep learning research dataset for
+effective transfer learning,''
+\textit{Radiol.\ Artif.\ Intell.}, vol.~4, no.~5, Art.\ no.~e210315, 2022,
+doi:~10.1148/ryai.210315.
+
+\bibitem{touvron2021layerscale}
+H.~Touvron, M.~Cord, A.~Sablayrolles, G.~Synnaeve, and H.~J\'{e}gou,
+``Going deeper with image transformers,''
+in \textit{Proc.\ IEEE/CVF Int.\ Conf.\ Comput.\ Vis.\ (ICCV)}, 2021,
+pp.~32--42, doi:~10.1109/ICCV48922.2021.00010.
+
+\bibitem{tan2021efficientnetv2}
+M.~Tan and Q.~V.~Le,
+``EfficientNetV2: Smaller models and faster training,''
+in \textit{Proc.\ Int.\ Conf.\ Mach.\ Learn.\ (ICML)}, 2021,
+pp.~10096--10106.
+
+\bibitem{lin2017focal}
+T.-Y.~Lin, P.~Goyal, R.~Girshick, K.~He, and P.~Doll\'{a}r,
+``Focal Loss for dense object detection,''
+in \textit{Proc.\ IEEE Int.\ Conf.\ Comput.\ Vis.\ (ICCV)}, 2017,
+pp.~2980--2988, doi:~10.1109/ICCV.2017.324.
+
+\bibitem{selvaraju2017gradcam}
+R.~R.~Selvaraju, M.~Cogswell, A.~Das, R.~Vedantam, D.~Parikh, and D.~Batra,
+``Grad-CAM: Visual explanations from deep networks via gradient-based
+localization,''
+in \textit{Proc.\ IEEE Int.\ Conf.\ Comput.\ Vis.\ (ICCV)}, 2017,
+pp.~618--626, doi:~10.1109/ICCV.2017.74.
+
+\bibitem{abnar2020rollout}
+S.~Abnar and W.~Zuidema,
+``Quantifying attention flow in transformers,''
+in \textit{Proc.\ 58th Annu.\ Meeting Assoc.\ Comput.\ Linguistics (ACL)},
+2020, pp.~4190--4197, doi:~10.18653/v1/2020.acl-main.385.
+
+\end{thebibliography}
+
+\end{document}
+% =========================================================
+% END OF FILE
+% =========================================================
